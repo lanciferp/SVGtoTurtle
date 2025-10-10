@@ -8,9 +8,13 @@ import sys
 import os
 import numpy as np
 from svg_to_turtle_path import draw_from_paths
-from svgpath_utils import path1_is_contained_in_path2
+from svgpath_utils import path1_is_contained_in_path2, solve_bezier_self_intersection_complex
+
 
 import svgpathtools
+
+from sympy import symbols, simplify, Eq, solve, I, expand
+t1, t2 = symbols('t1 t2', real=True)
 
 def create_nesting_dolls(paths):
     russian_doll_rel = set()
@@ -23,7 +27,6 @@ def create_nesting_dolls(paths):
                 russian_doll_rel.add((path, path2))
                 
     print(len(russian_doll_rel), "paths are contained in other paths")
-
 
 
     if len(russian_doll_rel) == 0:
@@ -91,7 +94,7 @@ def nest_dolls_rec(child, doll_relations):
 
 
 if __name__ == '__main__':
-    svg_path = "./example_images/rooster-svgrepo-com.svg"
+    svg_path = "./example_images/cat-svgrepo-com.svg"
 
     if os.path.isfile(svg_path):
         paths, attributes = svgpathtools.svg2paths(svg_path)
@@ -120,6 +123,7 @@ if __name__ == '__main__':
     segments.append(svgpathtools.CubicBezier(-1.78+5.76j, 16.04+8.2j, -2.58+0.24j, 4.14+8.67j))
     paths.append(svgpathtools.Path(segments[-1]))
     intersections = []
+    
 
     print(len(segments), "segments found in", svg_path)
     # look for intersections in segments
@@ -159,7 +163,7 @@ if __name__ == '__main__':
     screen = turtle.Screen()
     screen.tracer(0)
 
-    draw_from_paths(t, paths, scaling_factor=.5, scale=True)
+    draw_from_paths(t, paths, scaling_factor=10, scale=True)
 
     #on each intersection point draw a red dot
     print(len(intersection_points_i), "intersection points found")
@@ -172,6 +176,13 @@ if __name__ == '__main__':
         t.pendown()
         t.dot(5, "red")
 
+    x,y = solve_bezier_self_intersection_complex(-1.78+5.76j, 16.04+8.2j, -2.58+0.24j, 4.14+8.67j)
+    t.penup()
+
+    t.goto(x*10, y*10)
+    t.pendown()
+    t.dot(5, "blue")
+    t.penup()
     offset = -25
     
     
