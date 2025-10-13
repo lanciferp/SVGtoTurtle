@@ -1,7 +1,6 @@
 from svgpathtools import Path, Line, CubicBezier
 
-from sympy import symbols, simplify, Eq, solve, I, expand
-t1, t2 = symbols('t1 t2', real=True)
+import numpy as np
 
 def path1_is_contained_in_path2(path1, path2):
     #assert path2.isclosed()  # This question isn't well-defined otherwise
@@ -19,44 +18,40 @@ def path1_is_contained_in_path2(path1, path2):
         return True
     else:
         return False
+
+
+def optimized_bezier_self_intersect(segment):
+    if not isinstance(segment, CubicBezier):
+        return []
     
-def bezier_complex(P0, P1, P2, P3, t):
-    """Return cubic Bézier expression in complex form at parameter t"""
-    return (
-        (1 - t)**3 * P0 +
-        3 * (1 - t)**2 * t * P1 +
-        3 * (1 - t) * t**2 * P2 +
-        t**3 * P3
-    )
+    P0, P1, P2, P3 = segment.start, segment.control1, segment.control2, segment.end
 
-def solve_bezier_self_intersection_complex(P0, P1, P2, P3):
-    # Define symbolic Bézier curve points
-    B1 = expand(bezier_complex(P0, P1, P2, P3, t1))
-    B2 = expand(bezier_complex(P0, P1, P2, P3, t2))
+    vx, vy, vz  = P2 - P1, P1 - P0, P3 - P0
 
-    # Equation: B(t1) == B(t2)
-    diff = simplify(B1 - B2)
-
-    # Separate real and imaginary parts (x and y components)
-    eq_real = Eq(diff.as_real_imag()[0], 0)
-    eq_imag = Eq(diff.as_real_imag()[1], 0)
-
-    # Solve the system
-    sol = solve((eq_real, eq_imag), (t1, t2), dict=True)
-
-    # Filter valid solutions: t1 ≠ t2 and both in (0, 1)
-    valid = []
-    for s in sol:
-        if t1 in s and t2 in s:
-            try:
-                t1f = float(s[t1].evalf())
-                t2f = float(s[t2].evalf())
-                if 0 < t1f < 1 and 0 < t2f < 1 and abs(t1f - t2f) > 1e-6:
-                    valid.append((t1f, t2f))
-            except (TypeError, ValueError):
-                continue
+    try:
+        x,y = np.linalg.solve([[vx.real, vy.real],
+                              [vx.imag, vy.imag, ]], [vz.real, vz.imag])
+    except np.linalg.LinAlgError:
+        return []
     
-    p=CubicBezier(P0, P1, P2, P3).poly()
-    x = p(valid[0][0]).real
-    y = p(valid[0][1]).imag * -1
-    return x,y
+    if x > 1 or \
+           4 * y > (x + 1) * (3 - x) or \
+           x > 0 and 2 * y + x < np.sqrt(3 * x * (4 - x)) or \
+           3 * y < x * (3 - x):
+            return []
+    rs = (x - 3) / (x + y - 3)
+    rp = rs * rs + 3 / (x + y - 3)
+    x1 = (rs - np.sqrt(rs * rs - 4 * rp)) / 2
+    results = sorted([x1, rp / x1])
+
+    if len(results) > 0:
+        p=CubicBezier(P0, P1, P2, P3).poly()
+        solutions = []
+        for res in results:
+            x = p(res).real
+            y = p(res).imag
+            solutions.append(complex(x,y))
+        return solutions
+    return []
+
+
