@@ -9,7 +9,7 @@ import sys
 import os
 import numpy as np
 from svg_to_turtle_path import draw_from_paths
-from svgpath_utils import path1_is_contained_in_path2,  optimized_bezier_self_intersect
+import  svgpath_utils
 
 
 import svgpathtools
@@ -24,7 +24,7 @@ def create_nesting_dolls(paths):
         for path2 in paths:
             if path == path2:
                 continue
-            if path1_is_contained_in_path2(path, path2):
+            if svgpath_utils.path1_is_contained_in_path2(path, path2):
                 russian_doll_rel.add((path, path2))
                 
     print(len(russian_doll_rel), "paths are contained in other paths")
@@ -41,7 +41,7 @@ def create_nesting_dolls(paths):
             for cont_path2 in cont_subpaths:
                 if cont_path1 == cont_path2:
                     continue
-                if path1_is_contained_in_path2(cont_path1, cont_path2):
+                if svgpath_utils.path1_is_contained_in_path2(cont_path1, cont_path2):
                     russian_doll_rel.add((cont_path1, cont_path2))
 
     print(len(russian_doll_rel), "continuous subpaths are contained in other paths")
@@ -70,6 +70,23 @@ def nest_dolls_rec(child, doll_relations):
         for gchild in g_child_list:
             gchildren.append(nest_dolls_rec(gchild, doll_relations))
             return gchildren
+
+
+def fill_with_diagonal_lines(t, path, spacing=5, scaling_factor=10):
+    #calculate bounding box
+    xmin, xmax, ymin, ymax = path.bbox()
+
+    #draw diagonal lines from top-left to bottom-right
+    x_list = np.linspace(xmin, xmax, num=int((xmax - xmin) / spacing) + 1)
+
+    for x in x_list:
+        #find the points that contain this X
+
+        for segment in path:
+            seg_xmin, seg_xmax, seg_ymin, seg_ymax = segment.bbox()
+
+            if seg_xmin <= x <= seg_xmax: 
+                print(x, svgpath_utils.get_y_from_x_bezier(segment, x))
 
 
 if __name__ == '__main__':
@@ -104,7 +121,6 @@ if __name__ == '__main__':
     intersections = []
     
     #seperate paths that intersect from those that don't
-
     print(len(segments), "segments found in", svg_path)
     # look for intersections in segments
     for segment in segments:
@@ -123,6 +139,11 @@ if __name__ == '__main__':
             seg1_int = seg1.poly()(point[0])
             intersection_points_i.add(seg1_int)
 
+    for segment in segments:
+        if isinstance(segment, svgpathtools.CubicBezier):
+            solutions = svgpath_utils.optimized_bezier_self_intersect(segment)
+            if len(solutions) > 0:
+                intersection_points_i.add(solutions[0])
 
     t = turtle.Turtle()
     t.speed(0)  
@@ -137,25 +158,32 @@ if __name__ == '__main__':
     print(len(intersection_points_i), "intersection points found")
     t.color("red")
     for point in intersection_points_i:
-        x = point.real * 10
-        y = point.imag * -10
+        x = point.real * sf
+        y = point.imag * -sf
         t.penup()
         t.goto(x, y)
         t.pendown()
         t.dot(5, "red")
     
 
-    for segment in segments:
-        if isinstance(segment, svgpathtools.CubicBezier):
-            solutions = optimized_bezier_self_intersect(segment)
-            if len(solutions) > 0:
-                x = solutions[0].real * sf
-                y = solutions[0].imag * -sf
+    for path in paths:
 
-                t.penup()
-                t.goto(x, y)
-                t.pendown()
-                t.dot(5, "blue")
-                t.penup()
+        # if the path has no children, and no intersections, fill with diagonal lines
+        is_last = True
+        for rel in nested_path_rel:
+            if rel[1] == path:
+                is_last = False
+        if is_last:
+            is_alone = True
+            for path2 in paths:
+                if path == path2:
+                    continue
+                intersections = path.intersect(path2)
+                if intersections:
+                    is_alone = False
+
+            if is_alone:
+                fill_with_diagonal_lines(t, path, spacing=10, scaling_factor=sf)
+
 
     turtle.done()

@@ -20,6 +20,37 @@ def path1_is_contained_in_path2(path1, path2):
         return False
 
 
+def get_y_from_x_bezier(bezier, x):
+    if not isinstance(bezier, CubicBezier):
+        raise ValueError("Input must be a CubicBezier segment")
+    
+    P0, P1, P2, P3 = bezier.start, bezier.control1, bezier.control2, bezier.end
+
+    # Coefficients for the cubic equation Ax^3 + Bx^2 + Cx + D = 0
+    A = -P0.real + 3*P1.real - 3*P2.real + P3.real
+    B = 3*P0.real - 6*P1.real + 3*P2.real
+    C = -3*P0.real + 3*P1.real
+    D = P0.real - x
+
+    # Calculate the discriminant
+    discriminant = 18*A*B*C*D - 4*B**3*D + B**2*C**2 - 4*A*C**3 - 27*A**2*D**2
+
+    if discriminant < 0:
+        return []  # No real roots
+
+    # Use numpy to find the roots of the cubic equation
+    coefficients = [A, B, C, D]
+    roots = np.roots(coefficients)
+
+    # Filter out the real roots within the range [0, 1]
+    real_roots = [root.real for root in roots if np.isreal(root) and 0 <= root.real <= 1]
+
+    # Calculate corresponding y values
+    y_values = [bezier.poly()(t).imag for t in real_roots]
+
+    return y_values
+
+
 def optimized_bezier_self_intersect(segment):
     if not isinstance(segment, CubicBezier):
         return []
