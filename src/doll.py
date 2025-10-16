@@ -45,7 +45,7 @@ class Doll():
 
         if hasattr(self, 'intersections') :
             #determine if the intersections bisect the doll into multiple regions
-                doll = self.intersecting_dolls[0].int_doll
+                int_doll = self.intersecting_dolls[0].int_doll
                 points = self.intersecting_dolls[0].points
 
                 if len(points) == 1:
@@ -55,7 +55,7 @@ class Doll():
 
                 else:
                     # more than one intersection point, we need to check if it is a bisection, or not
-                    int_path = doll.path
+                    int_path = int_doll.path
 
                     #get the section of the path between the two intersection points
 
@@ -77,21 +77,40 @@ class Doll():
         elif hasattr(self, 'children'):
             #if there are no instersections, but there are children, then we have one outer region, and the children are holes
 
+            if len(self.children()) == 1:
+                #simple case, just one child, so we can create the outer region directly
+                outer_region = OuterRegion(self.path, [self.children[0].path])
+                regions.append(outer_region)
+                return regions
+
+            else:
+                childpaths = []
+
+                for child1 in self.children:
+                    if hasattr(child1, 'intersections'):
+                        # child_intersections = child1.intersections
+                        # conjoined_path = None
+                        # for child2 in self.children:
+                        #     if child1 == child2:
+                        #         continue
+                        #     for intersection in child_intersections:
+                        #         if intersection.int_doll == child2:
+                        #             #these two children intersect, so we need to solve for the intersections between them
+
+                        #             #we need a nice math way to think about this, probably using ray casting, as the two children aren't necessarily
+                        #             #a nice venn diagram, basically we need to look along the segments between each intersection point
+                        #             #and find the outermost segments
+                        pass
+                
+                    else:
+                        childpaths.append(child1.path)
+                            
             #create outer region, listing children as inner paths
-
-                # if the children intersect, we need to solve for the intersections, and then list a continuous path including
-                # all of them as the interior path. 
-
-            # once possible child intersections are solved, create the list of paths for the inner regions
-
-
-            pass
+            outer_region = OuterRegion(self.path, childpaths)
+            return regions.append(outer_region)
         
         if not hasattr(self, 'intersections') and not hasattr(self, 'children'):
             return regions.append(Region(self.path))
-
-                
-        return regions
 
 class Region():
     def __init__(self, segments):
