@@ -1,7 +1,6 @@
 from svgpathtools import Path, Line, CubicBezier
 
-from sympy import symbols, simplify, Eq, solve, I, expand
-t1, t2 = symbols('t1 t2', real=True)
+import numpy as np
 
 def path1_is_contained_in_path2(path1, path2):
     #assert path2.isclosed()  # This question isn't well-defined otherwise
@@ -19,44 +18,71 @@ def path1_is_contained_in_path2(path1, path2):
         return True
     else:
         return False
+
+
+def get_y_from_x_bezier(bezier, x):
+    if not isinstance(bezier, CubicBezier):
+        raise ValueError("Input must be a CubicBezier segment")
     
-def bezier_complex(P0, P1, P2, P3, t):
-    """Return cubic Bézier expression in complex form at parameter t"""
-    return (
-        (1 - t)**3 * P0 +
-        3 * (1 - t)**2 * t * P1 +
-        3 * (1 - t) * t**2 * P2 +
-        t**3 * P3
-    )
+    P0, P1, P2, P3 = bezier.start, bezier.control1, bezier.control2, bezier.end
 
-def solve_bezier_self_intersection_complex(P0, P1, P2, P3):
-    # Define symbolic Bézier curve points
-    B1 = expand(bezier_complex(P0, P1, P2, P3, t1))
-    B2 = expand(bezier_complex(P0, P1, P2, P3, t2))
+    # Coefficients for the cubic equation Ax^3 + Bx^2 + Cx + D = 0
+    A = -P0.real + 3*P1.real - 3*P2.real + P3.real
+    B = 3*P0.real - 6*P1.real + 3*P2.real
+    C = -3*P0.real + 3*P1.real
+    D = P0.real - x
 
-    # Equation: B(t1) == B(t2)
-    diff = simplify(B1 - B2)
+    # Calculate the discriminant
+    discriminant = 18*A*B*C*D - 4*B**3*D + B**2*C**2 - 4*A*C**3 - 27*A**2*D**2
 
-    # Separate real and imaginary parts (x and y components)
-    eq_real = Eq(diff.as_real_imag()[0], 0)
-    eq_imag = Eq(diff.as_real_imag()[1], 0)
+    if discriminant < 0:
+        return []  # No real roots
 
-    # Solve the system
-    sol = solve((eq_real, eq_imag), (t1, t2), dict=True)
+    # Use numpy to find the roots of the cubic equation
+    coefficients = [A, B, C, D]
+    roots = np.roots(coefficients)
 
-    # Filter valid solutions: t1 ≠ t2 and both in (0, 1)
-    valid = []
-    for s in sol:
-        if t1 in s and t2 in s:
-            try:
-                t1f = float(s[t1].evalf())
-                t2f = float(s[t2].evalf())
-                if 0 < t1f < 1 and 0 < t2f < 1 and abs(t1f - t2f) > 1e-6:
-                    valid.append((t1f, t2f))
-            except (TypeError, ValueError):
-                continue
+    # Filter out the real roots within the range [0, 1]
+    real_roots = [root.real for root in roots if np.isreal(root) and 0 <= root.real <= 1]
+
+    # Calculate corresponding y values
+    y_values = [bezier.poly()(t).imag for t in real_roots]
+
+    return y_values
+
+
+def optimized_bezier_self_intersect(segment):
+    if not isinstance(segment, CubicBezier):
+        return []
     
-    p=CubicBezier(P0, P1, P2, P3).poly()
-    x = p(valid[0][0]).real
-    y = p(valid[0][1]).imag * -1
-    return x,y
+    P0, P1, P2, P3 = segment.start, segment.control1, segment.control2, segment.end
+
+    vx, vy, vz  = P2 - P1, P1 - P0, P3 - P0
+
+    try:
+        x,y = np.linalg.solve([[vx.real, vy.real],
+                              [vx.imag, vy.imag, ]], [vz.real, vz.imag])
+    except np.linalg.LinAlgError:
+        return []
+    
+    if x > 1 or \
+           4 * y > (x + 1) * (3 - x) or \
+           x > 0 and 2 * y + x < np.sqrt(3 * x * (4 - x)) or \
+           3 * y < x * (3 - x):
+            return []
+    rs = (x - 3) / (x + y - 3)
+    rp = rs * rs + 3 / (x + y - 3)
+    x1 = (rs - np.sqrt(rs * rs - 4 * rp)) / 2
+    results = sorted([x1, rp / x1])
+
+    if len(results) > 0:
+        p=CubicBezier(P0, P1, P2, P3).poly()
+        solutions = []
+        for res in results:
+            x = p(res).real
+            y = p(res).imag
+            solutions.append(complex(x,y))
+        return solutions
+    return []
+
+

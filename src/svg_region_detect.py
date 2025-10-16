@@ -2,13 +2,14 @@ import turtle
 
 import pip
 import math
+import time
 
 import subprocess
 import sys
 import os
 import numpy as np
 from svg_to_turtle_path import draw_from_paths
-from svgpath_utils import path1_is_contained_in_path2, solve_bezier_self_intersection_complex
+import  svgpath_utils
 
 
 import svgpathtools
@@ -23,7 +24,7 @@ def create_nesting_dolls(paths):
         for path2 in paths:
             if path == path2:
                 continue
-            if path1_is_contained_in_path2(path, path2):
+            if svgpath_utils.path1_is_contained_in_path2(path, path2):
                 russian_doll_rel.add((path, path2))
                 
     print(len(russian_doll_rel), "paths are contained in other paths")
@@ -40,7 +41,7 @@ def create_nesting_dolls(paths):
             for cont_path2 in cont_subpaths:
                 if cont_path1 == cont_path2:
                     continue
-                if path1_is_contained_in_path2(cont_path1, cont_path2):
+                if svgpath_utils.path1_is_contained_in_path2(cont_path1, cont_path2):
                     russian_doll_rel.add((cont_path1, cont_path2))
 
     print(len(russian_doll_rel), "continuous subpaths are contained in other paths")
@@ -52,29 +53,7 @@ def create_nesting_dolls(paths):
 
     
     print(len(dolls), "unique paths found that are part of nesting dolls")
-    # # now nest paths properly
-    # nested_dolls = list()
-    # for doll in dolls:
-    #     is_root = True
-    #     children = []
-    #     for rel in russian_doll_rel:
-    #         if rel[0] == doll:
-    #             is_root = False
-    #             break
-    #         if rel[1] == doll:
-    #             children.append(rel[1])
 
-    #     if not is_root:
-    #         continue
-
-    #     print("root doll found")
-    #     if len(children) == 0:
-    #         nested_dolls.append(doll)
-        
-    #     elif len(children) >= 1:
-    #         for child in children:
-    #             new_child = nest_dolls_rec(child, russian_doll_rel)
-    #             nested_dolls.append([doll, new_child])
     return list(dolls), russian_doll_rel
 
 
@@ -91,6 +70,23 @@ def nest_dolls_rec(child, doll_relations):
         for gchild in g_child_list:
             gchildren.append(nest_dolls_rec(gchild, doll_relations))
             return gchildren
+
+
+def fill_with_diagonal_lines(t, path, spacing=5, scaling_factor=10):
+    #calculate bounding box
+    xmin, xmax, ymin, ymax = path.bbox()
+
+    #draw diagonal lines from top-left to bottom-right
+    x_list = np.linspace(xmin, xmax, num=int((xmax - xmin) / spacing) + 1)
+
+    for x in x_list:
+        #find the points that contain this X
+
+        for segment in path:
+            seg_xmin, seg_xmax, seg_ymin, seg_ymax = segment.bbox()
+
+            if seg_xmin <= x <= seg_xmax: 
+                print(x, svgpath_utils.get_y_from_x_bezier(segment, x))
 
 
 if __name__ == '__main__':
@@ -124,7 +120,7 @@ if __name__ == '__main__':
     paths.append(svgpathtools.Path(segments[-1]))
     intersections = []
     
-
+    #seperate paths that intersect from those that don't
     print(len(segments), "segments found in", svg_path)
     # look for intersections in segments
     for segment in segments:
@@ -143,18 +139,11 @@ if __name__ == '__main__':
             seg1_int = seg1.poly()(point[0])
             intersection_points_i.add(seg1_int)
 
-    # look for continous curves
     for segment in segments:
-        seg1_start = segment.start
-        seg1_end = segment.end
-        for segment2 in segments:
-            if segment == segment2:
-                continue
-
-            seg2_start = segment2.start
-            seg2_end = segment2.end
-
-
+        if isinstance(segment, svgpathtools.CubicBezier):
+            solutions = svgpath_utils.optimized_bezier_self_intersect(segment)
+            if len(solutions) > 0:
+                intersection_points_i.add(solutions[0])
 
     t = turtle.Turtle()
     t.speed(0)  
@@ -162,30 +151,39 @@ if __name__ == '__main__':
     t.width(2)
     screen = turtle.Screen()
     screen.tracer(0)
-
-    draw_from_paths(t, paths, scaling_factor=10, scale=True)
+    sf = 10
+    draw_from_paths(t, paths, scaling_factor=sf, scale=True)
 
     #on each intersection point draw a red dot
     print(len(intersection_points_i), "intersection points found")
     t.color("red")
     for point in intersection_points_i:
-        x = point.real * 10
-        y = point.imag * -10
+        x = point.real * sf
+        y = point.imag * -sf
         t.penup()
         t.goto(x, y)
         t.pendown()
         t.dot(5, "red")
-
-    x,y = solve_bezier_self_intersection_complex(-1.78+5.76j, 16.04+8.2j, -2.58+0.24j, 4.14+8.67j)
-    t.penup()
-
-    t.goto(x*10, y*10)
-    t.pendown()
-    t.dot(5, "blue")
-    t.penup()
-    offset = -25
     
-    
+
+    for path in paths:
+
+        # if the path has no children, and no intersections, fill with diagonal lines
+        is_last = True
+        for rel in nested_path_rel:
+            if rel[1] == path:
+                is_last = False
+        if is_last:
+            is_alone = True
+            for path2 in paths:
+                if path == path2:
+                    continue
+                intersections = path.intersect(path2)
+                if intersections:
+                    is_alone = False
+
+            if is_alone:
+                fill_with_diagonal_lines(t, path, spacing=10, scaling_factor=sf)
+
 
     turtle.done()
-
