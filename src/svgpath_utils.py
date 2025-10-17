@@ -20,6 +20,21 @@ def path1_is_contained_in_path2(path1, path2):
         return False
 
 
+def get_y_from_x_path(path, x):
+    y_values = []
+    for segment in path:
+        seg_bbox = segment.bbox()
+        if not (seg_bbox[0] <= x <= seg_bbox[2]):
+            continue
+
+        if isinstance(segment, CubicBezier):
+            seg_y_values = get_y_from_x_bezier(segment, x)
+        elif isinstance(segment, Line):
+            seg_y_values = get_y_from_x_line(segment, x)
+        y_values.extend(seg_y_values)
+    return y_values
+
+
 def get_y_from_x_bezier(bezier, x):
     if not isinstance(bezier, CubicBezier):
         raise ValueError("Input must be a CubicBezier segment")
@@ -49,6 +64,29 @@ def get_y_from_x_bezier(bezier, x):
     y_values = [bezier.poly()(t).imag for t in real_roots]
 
     return y_values
+
+
+def get_y_from_x_line(line, x):
+    if not isinstance(line, Line):
+        raise ValueError("Input must be a Line segment")
+    
+    x0, y0 = line.start.real, line.start.imag
+    x1, y1 = line.end.real, line.end.imag
+
+    if x0 == x1:  # vertical line
+        if x == x0:
+            return [y0, y1]  # return both y values
+        else:
+            return []  # no intersection
+
+    if (x < min(x0, x1)) or (x > max(x0, x1)):
+        return []  # x is out of bounds of the line segment
+
+    # Calculate the corresponding y value using linear interpolation
+    t = (x - x0) / (x1 - x0)
+    y = y0 + t * (y1 - y0)
+
+    return [y]
 
 
 def optimized_bezier_self_intersect(segment):

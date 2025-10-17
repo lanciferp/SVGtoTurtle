@@ -39,12 +39,10 @@ def draw_from_paths(t, paths, scaling_factor=1, move_center=False, offset_x=0, o
                 t.penup()
 
             elif isinstance(segment, svgpathtools.path.CubicBezier):
-                p = segment.poly() # Get the polynomial representation, remember it's complex numbers and a function of time
-
                 t.penup()
                 t_values = np.linspace(0, 1, num=20).tolist()
 
-                i_numbers = p(t_values)
+                i_numbers = segment.points(t_values)
                 x_values = []
                 y_values = []
 
