@@ -5,3 +5,4 @@ src\__pycache__\*
 venv/   
 src/__pycache__/svgpath_utils.cpython-38.pyc
 *.pyc
+*.stl
