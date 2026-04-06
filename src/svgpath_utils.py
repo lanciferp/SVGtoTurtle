@@ -4,7 +4,12 @@ import numpy as np
 
 def path1_is_contained_in_path2(path1, path2):
     #assert path2.isclosed()  # This question isn't well-defined otherwise
-    if path2.intersect(path1):
+    try:
+        if path2.intersect(path1):
+            return False
+    except AssertionError:
+        # svgpathtools raises AssertionError when two paths share identical
+        # segment objects — treat as intersecting (not contained).
         return False
 
     # find a point that's definitely outside path2
@@ -20,6 +25,56 @@ def path1_is_contained_in_path2(path1, path2):
         return False
 
 
+def split_path_at_intersections(path, seg_a, t_a, seg_b, t_b):
+    """
+    Split a closed path at two points defined by (segment, t) pairs.
+    Returns two sub-paths (Path objects) that together partition the original path boundary,
+    or (None, None) if either segment is not found in the path.
+
+    Sub-path 1 travels from the split point on seg_a forward to the split point on seg_b.
+    Sub-path 2 travels from the split point on seg_b forward (wrapping around) to the split point on seg_a.
+    """
+    segments = list(path)
+
+    idx_a, idx_b = None, None
+    for i, seg in enumerate(segments):
+        if seg == seg_a:
+            idx_a = i
+        if seg == seg_b:
+            idx_b = i
+
+    if idx_a is None or idx_b is None:
+        return None, None
+
+    # Handle the case where both intersections fall on the same segment
+    if idx_a == idx_b:
+        t_lo, t_hi = (t_a, t_b) if t_a <= t_b else (t_b, t_a)
+        seg_start, seg_mid_and_end = seg_a.split(t_lo)
+        # re-parameterise t_hi onto the second piece
+        t_hi_reparam = (t_hi - t_lo) / (1.0 - t_lo) if (1.0 - t_lo) > 1e-12 else 0.0
+        seg_mid, seg_end = seg_mid_and_end.split(t_hi_reparam)
+        sub1_segs = [seg_mid]
+        sub2_segs = [seg_end] + segments[idx_a + 1:] + segments[:idx_a] + [seg_start]
+        return Path(*sub1_segs), Path(*sub2_segs)
+
+    # Normalize so idx_a comes before idx_b in the path
+    if idx_a > idx_b:
+        idx_a, idx_b = idx_b, idx_a
+        seg_a, seg_b = seg_b, seg_a
+        t_a, t_b = t_b, t_a
+
+    seg_a_before, seg_a_after = seg_a.split(t_a)
+    seg_b_before, seg_b_after = seg_b.split(t_b)
+
+    # Sub-path 1: seg_a split-point → seg_b split-point (forward)
+    sub1_segs = [seg_a_after] + segments[idx_a + 1:idx_b] + [seg_b_before]
+
+    # Sub-path 2: seg_b split-point → seg_a split-point (forward, wrapping around)
+    sub2_segs = [seg_b_after] + segments[idx_b + 1:] + segments[:idx_a] + [seg_a_before]
+
+    return Path(*sub1_segs), Path(*sub2_segs)
+
+
 def get_y_from_x_path(path, x):
     y_values = []
     for segment in path:
@@ -27,12 +82,18 @@ def get_y_from_x_path(path, x):
         if not (seg_bbox[0] <= x <= seg_bbox[2]):
             continue
 
-        if isinstance(segment, CubicBezier):
-            seg_y_values = get_y_from_x_bezier(segment, x)
-        elif isinstance(segment, Line):
-            seg_y_values = get_y_from_x_line(segment, x)
+        seg_y_values = get_y_from_x_segment(segment, x)
         y_values.extend(seg_y_values)
     return y_values
+
+
+def get_y_from_x_segment(segment, x):
+    if isinstance(segment, CubicBezier):
+        return get_y_from_x_bezier(segment, x)
+    elif isinstance(segment, Line):
+        return get_y_from_x_line(segment, x)
+    else:
+        raise ValueError("Segment must be a CubicBezier or Line")
 
 
 def get_y_from_x_bezier(bezier, x):
@@ -122,5 +183,3 @@ def optimized_bezier_self_intersect(segment):
             solutions.append(complex(x,y))
         return solutions
     return []
-
-

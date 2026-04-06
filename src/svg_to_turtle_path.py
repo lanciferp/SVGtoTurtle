@@ -59,7 +59,7 @@ def draw_from_paths(t, paths, scaling_factor=1, move_center=False, offset_x=0, o
 
 if __name__ == '__main__':
     print(os.getcwd())
-    svg_path = "./example_images/cat-svgrepo-com.svg"
+    svg_path = os.path.join(os.path.dirname(__file__), "..", "example_images", "cat-svgrepo-com.svg")
 
     if os.path.isfile(svg_path):
         paths, attributes = svgpathtools.svg2paths(svg_path)

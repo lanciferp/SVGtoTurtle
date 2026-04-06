@@ -1,189 +1,239 @@
 import turtle
-
-import pip
-import math
-import time
-
-import subprocess
-import sys
 import os
-import numpy as np
-from svg_to_turtle_path import draw_from_paths
-import  svgpath_utils
-
-
+import xml.etree.ElementTree as ET
 import svgpathtools
+import svgpath_utils
 
-from sympy import symbols, simplify, Eq, solve, I, expand
-t1, t2 = symbols('t1 t2', real=True)
+from region import create_nesting_dolls, sort_paths_outer_first, draw_path
 
-def create_nesting_dolls(paths):
-    russian_doll_rel = set()
-    #check if paths are in other paths
+SVG_DIR = os.path.join(os.path.dirname(__file__), "..", "example_images")
+SVG_FILES = [
+    #"cat-svgrepo-com.svg",
+    "rooster-svgrepo-com.svg",
+    "osa.svg",
+    "rails.svg",
+    #"python.svg",
+]
+
+pen_colors  = ["#8B0000", "#00008B", "#006400", "#8B4500", "#4B0082",
+               "#8B6914", "#005F5F", "#6B006B", "#3B3B00", "#00456B"]
+fill_colors = ["#FFB3B3", "#B3B3FF", "#B3FFB3", "#FFD9B3", "#D9B3FF",
+               "#FFF0B3", "#B3FFFF", "#FFB3FF", "#FFFFB3", "#B3DFFF"]
+
+# Presentation attributes that can be inherited from parent elements
+_INHERITED_ATTRS = ('fill', 'stroke', 'stroke-width', 'opacity',
+                    'fill-opacity', 'stroke-opacity')
+_SHAPE_TAGS = {'path', 'circle', 'ellipse', 'rect',
+               'line', 'polyline', 'polygon'}
+
+
+def _parse_inherited_attrs(svg_file):
+    """
+    Walk the SVG XML tree in document order and return one attribute dict per
+    shape element, with group-level presentation attributes propagated to
+    children (same cascade rules as a browser).
+    Order matches svgpathtools.svg2paths output.
+    """
+    tree = ET.parse(svg_file)
+    root = tree.getroot()
+    strip_ns = lambda tag: tag.split('}')[-1]
+
+    results = []
+
+    def walk(el, inherited):
+        combined = dict(inherited)
+        # Inherit presentation attributes from element
+        for attr in _INHERITED_ATTRS:
+            v = el.get(attr)
+            if v is not None:
+                combined[attr] = v
+        # Also parse inline style="..." overrides
+        for item in el.get('style', '').split(';'):
+            if ':' in item:
+                k, v = item.split(':', 1)
+                combined[k.strip()] = v.strip()
+
+        if strip_ns(el.tag) in _SHAPE_TAGS:
+            results.append(dict(combined))
+
+        for child in el:
+            walk(child, combined)
+
+    walk(root, {})
+    return results
+
+
+def process_svg(svg_path):
+    """
+    Load an SVG, detect nesting, find segment intersections.
+    Returns (ordered_paths, attrs_by_path, intersection_points, svg_bbox).
+    svg_bbox is (xmin, xmax, ymin, ymax) in SVG coordinates.
+    """
+    if not os.path.isfile(svg_path):
+        raise FileNotFoundError(f"SVG not found: {svg_path}")
+
+    paths, svgpt_attrs = svgpathtools.svg2paths(svg_path)
+    inherited     = _parse_inherited_attrs(svg_path)
+    print(f"\n--- {os.path.basename(svg_path)} ---")
+
+    # Merge inherited group styles with per-element attrs.
+    # Per-element attributes win; inherited fill in the gaps.
+    merged_attrs = []
+    for path_attr, inh in zip(svgpt_attrs, inherited):
+        merged = dict(inh)
+        for k, v in path_attr.items():
+            if v:          # svgpathtools sometimes returns empty strings
+                merged[k] = v
+        merged_attrs.append(merged)
+
+    # Split compound paths (multiple M commands) into continuous subpaths,
+    # each inheriting its parent's merged attributes.
+    expanded_paths = []
+    attrs_by_path  = {}
+    for path, attr in zip(paths, merged_attrs):
+        for subpath in path.continuous_subpaths():
+            expanded_paths.append(subpath)
+            attrs_by_path[id(subpath)] = attr
+    paths = expanded_paths
+    print(f"{len(paths)} subpaths after expansion")
+
+    nested_paths, nested_path_rel = create_nesting_dolls(paths)
+
+    # Re-add any subpaths dropped by create_nesting_dolls (standalone, non-nested)
+    nested_ids = {id(p) for p in nested_paths}
+    paths = nested_paths + [p for p in paths if id(p) not in nested_ids]
+
+    # Only check segments across DIFFERENT paths; skip endpoint touches (t near 0/1)
+    EPS = 1e-4
+    intersection_points = set()
+    # Track which path pairs geometrically overlap (boundary crosses OR endpoint inside)
+    overlapping_pairs = set()   # set of (id(open_path), id(closed_path))
+    print(sum(len(p) for p in paths), "segments found")
+
+    for i, path_a in enumerate(paths):
+        for j, path_b in enumerate(paths):
+            if j <= i:
+                continue
+            has_intersection = False
+            for seg_a in path_a:
+                for seg_b in path_b:
+                    try:
+                        pts = seg_a.intersect(seg_b)
+                    except Exception:
+                        continue
+                    for t_a, t_b in pts:
+                        if (t_a < EPS or t_a > 1 - EPS or
+                                t_b < EPS or t_b > 1 - EPS):
+                            continue
+                        intersection_points.add(seg_a.point(t_a))
+                        has_intersection = True
+
+            if has_intersection:
+                overlapping_pairs.add((id(path_a), id(path_b)))
+
+    # Also catch open paths whose endpoints land inside a closed path
+    # (line terminates inside a circle — boundaries don't cross, but they visually overlap)
+    closed_paths = [p for p in paths if abs(p.start - p.end) < 1e-4]
+    open_paths   = [p for p in paths if abs(p.start - p.end) >= 1e-4]
+    for op in open_paths:
+        for cp in closed_paths:
+            if (id(op), id(cp)) in overlapping_pairs or (id(cp), id(op)) in overlapping_pairs:
+                continue
+            if (svgpath_utils.path1_is_contained_in_path2(
+                    svgpathtools.Path(svgpathtools.Line(op.start, op.start + 1e-6)), cp) or
+                    svgpath_utils.path1_is_contained_in_path2(
+                    svgpathtools.Path(svgpathtools.Line(op.end, op.end + 1e-6)), cp)):
+                overlapping_pairs.add((id(op), id(cp)))
+
     for path in paths:
-        for path2 in paths:
-            if path == path2:
-                continue
-            if svgpath_utils.path1_is_contained_in_path2(path, path2):
-                russian_doll_rel.add((path, path2))
-                
-    print(len(russian_doll_rel), "paths are contained in other paths")
-
-
-    if len(russian_doll_rel) == 0:
-            # if there are none, try with continous subpaths
-        cont_subpaths = []
-        for path in paths:
-            path_subpaths = path.continuous_subpaths()
-            cont_subpaths.extend(path_subpaths)
-
-        for cont_path1 in cont_subpaths:
-            for cont_path2 in cont_subpaths:
-                if cont_path1 == cont_path2:
-                    continue
-                if svgpath_utils.path1_is_contained_in_path2(cont_path1, cont_path2):
-                    russian_doll_rel.add((cont_path1, cont_path2))
-
-    print(len(russian_doll_rel), "continuous subpaths are contained in other paths")
-
-    dolls = set()
-    for rel in russian_doll_rel:
-        dolls.add(rel[0])
-        dolls.add(rel[1])
-
-    
-    print(len(dolls), "unique paths found that are part of nesting dolls")
-
-    return list(dolls), russian_doll_rel
-
-
-
-def nest_dolls_rec(child, doll_relations):
-    g_child_list = []
-    for rel in doll_relations:
-        if rel[0] == child:
-            g_child_list.append(rel[1])
-    if len(g_child_list) == 0:
-        return child
-    else:
-        gchildren = []
-        for gchild in g_child_list:
-            gchildren.append(nest_dolls_rec(gchild, doll_relations))
-            return gchildren
-
-
-def fill_with_diagonal_lines(t, path, spacing=5, scaling_factor=10):
-    #calculate bounding box
-    xmin, xmax, ymin, ymax = path.bbox()
-
-    #draw diagonal lines from top-left to bottom-right
-    x_list = np.linspace(xmin, xmax, num=int((xmax - xmin) / spacing) + 1)
-
-    for x in x_list:
-        #find the points that contain this X
-
         for segment in path:
-            seg_xmin, seg_xmax, seg_ymin, seg_ymax = segment.bbox()
+            if isinstance(segment, svgpathtools.CubicBezier):
+                solutions = svgpath_utils.optimized_bezier_self_intersect(segment)
+                if solutions:
+                    intersection_points.add(solutions[0])
 
-            if seg_xmin <= x <= seg_xmax: 
-                print(x, svgpath_utils.get_y_from_x_bezier(segment, x))
+    print(len(intersection_points), "intersection points found")
+
+    ordered_paths = sort_paths_outer_first(paths, nested_path_rel, overlapping_pairs)
+
+    bboxes = [p.bbox() for p in paths if len(p) > 0]
+    xmin = min(b[0] for b in bboxes)
+    xmax = max(b[1] for b in bboxes)
+    ymin = min(b[2] for b in bboxes)
+    ymax = max(b[3] for b in bboxes)
+
+    return ordered_paths, attrs_by_path, intersection_points, (xmin, xmax, ymin, ymax)
 
 
-if __name__ == '__main__':
-    svg_path = "./example_images/cat-svgrepo-com.svg"
+def _resolve_color(attrs, key, fallback):
+    """
+    Return the colour value for `key`:
+      - explicit 'none'  → None  (caller should skip fill/stroke)
+      - value present    → that value
+      - not set          → fallback palette colour
+    """
+    if key not in attrs:
+        return fallback
+    val = attrs[key].strip()
+    if val.lower() == 'none':
+        return None   # explicitly disabled
+    return val if val else fallback
 
-    if os.path.isfile(svg_path):
-        paths, attributes = svgpathtools.svg2paths(svg_path)
-    else:
-        raise Exception("File not found")
-    
-    paths, nested_path_rel = create_nesting_dolls(paths)
 
-    #convert paths to list of segments
-    segments = []
- 
-    def paths_to_segments(paths):
-        segments = []
-        for path in paths:
-            for segment in path:
-                if isinstance(segment, svgpathtools.Path):
-                    segments.append(paths_to_segments(segment))
-                    return
-                else:
-                    segments.append(segment)
-        return segments
+def draw_svg(t, ordered_paths, attrs_by_path, intersection_points, sf, x_offset=0):
+    """Draw one SVG's paths and intersection dots, shifted by x_offset turtle units."""
+    for i, path in enumerate(ordered_paths):
+        a = attrs_by_path.get(id(path), {})
+        pen_color  = _resolve_color(a, 'stroke', pen_colors[i % len(pen_colors)])
+        fill_color = _resolve_color(a, 'fill',   fill_colors[i % len(fill_colors)])
+        try:
+            stroke_width = float(a.get('stroke-width', 1))
+        except (TypeError, ValueError):
+            stroke_width = 1
 
-    segments = paths_to_segments(paths)
+        draw_path(t, path, sf,
+                  pen_color=pen_color,
+                  fill_color=fill_color,
+                  stroke_width=stroke_width,
+                  x_offset=x_offset)
 
-    #add some self intersecting segments for testing
-    segments.append(svgpathtools.CubicBezier(-1.78+5.76j, 16.04+8.2j, -2.58+0.24j, 4.14+8.67j))
-    paths.append(svgpathtools.Path(segments[-1]))
-    intersections = []
-    
-    #seperate paths that intersect from those that don't
-    print(len(segments), "segments found in", svg_path)
-    # look for intersections in segments
-    for segment in segments:
-        for segment2 in segments:
-            if segment == segment2:
-                continue
-            intersection = segment.intersect(segment2)
-            if intersection:
-                intersections.append((segment, segment2, intersection))
-
-    intersection_points_i = set()
-    for intersection in intersections:
-        seg1, seg2, points = intersection
-        #convert to xy
-        for point in points:
-            seg1_int = seg1.poly()(point[0])
-            intersection_points_i.add(seg1_int)
-
-    for segment in segments:
-        if isinstance(segment, svgpathtools.CubicBezier):
-            solutions = svgpath_utils.optimized_bezier_self_intersect(segment)
-            if len(solutions) > 0:
-                intersection_points_i.add(solutions[0])
-
-    t = turtle.Turtle()
-    t.speed(0)  
-    turtle.bgcolor("white")
-    t.width(2)
-    screen = turtle.Screen()
-    screen.tracer(0)
-    sf = 10
-    draw_from_paths(t, paths, scaling_factor=sf, scale=True)
-
-    #on each intersection point draw a red dot
-    print(len(intersection_points_i), "intersection points found")
-    t.color("red")
-    for point in intersection_points_i:
-        x = point.real * sf
+    t.pencolor("red")
+    t.pensize(1)
+    for point in intersection_points:
+        x = point.real * sf + x_offset
         y = point.imag * -sf
         t.penup()
         t.goto(x, y)
         t.pendown()
         t.dot(5, "red")
-    
-
-    for path in paths:
-
-        # if the path has no children, and no intersections, fill with diagonal lines
-        is_last = True
-        for rel in nested_path_rel:
-            if rel[1] == path:
-                is_last = False
-        if is_last:
-            is_alone = True
-            for path2 in paths:
-                if path == path2:
-                    continue
-                intersections = path.intersect(path2)
-                if intersections:
-                    is_alone = False
-
-            if is_alone:
-                fill_with_diagonal_lines(t, path, spacing=10, scaling_factor=sf)
 
 
+if __name__ == '__main__':
+    TARGET_WIDTH = 400  # turtle units each image is scaled to fit
+    padding = 50        # turtle units of gap between images
+
+    results = []
+    for filename in SVG_FILES:
+        svg_path = os.path.join(SVG_DIR, filename)
+        ordered_paths, attrs_by_path, intersection_points, bbox = process_svg(svg_path)
+        results.append((ordered_paths, attrs_by_path, intersection_points, bbox))
+
+    t = turtle.Turtle()
+    t.speed(0)
+    t.hideturtle()
+    turtle.bgcolor("white")
+    screen = turtle.Screen()
+    screen.tracer(0)
+
+    x_cursor = 0
+    for ordered_paths, attrs_by_path, intersection_points, bbox in results:
+        xmin, xmax, ymin, ymax = bbox
+        svg_width = xmax - xmin
+        sf = TARGET_WIDTH / svg_width if svg_width > 0 else 1.0
+        x_offset = x_cursor - xmin * sf
+
+        draw_svg(t, ordered_paths, attrs_by_path, intersection_points, sf, x_offset=x_offset)
+        x_cursor += TARGET_WIDTH + padding
+
+    screen.update()
     turtle.done()
